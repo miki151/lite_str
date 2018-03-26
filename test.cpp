@@ -17,12 +17,13 @@ struct my_str_allocator {
   }
 
   static void deallocate(const char* ptr) {
+    assert(allocated.count(ptr));
     allocated.erase(ptr);
     delete [] ptr;
   }
 
-  static void check() {
-    assert(allocated.empty());
+  static bool empty() {
+    return allocated.empty();
   }
 };
 
@@ -35,6 +36,16 @@ void print(test_str s) {
 }
 
 #define EQ(a, b) do { if (!(a == b) || a != b) { std::cerr << a << "!=" << b << std::endl; abort(); }} while (0);
+
+void test0() {
+  test_str s = "lalalala";
+  EQ(s.size(), 8);
+  // no buffer has been allocated for s so far
+  assert(my_str_allocator::empty());
+  s += "pok";
+  // now there has been
+  assert(!my_str_allocator::empty());
+}
 
 void test1() {
   test_str s1 = "foo";
@@ -85,10 +96,11 @@ void test5() {
 }
 
 int main() {
+  test0();
   test1();
   test2();
   test3();
   test4();
   test5();
-  my_str_allocator::check();
+  assert(my_str_allocator::empty());
 }
