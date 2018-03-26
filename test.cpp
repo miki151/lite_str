@@ -3,6 +3,7 @@
 #include <cstdlib>
 #include <cassert>
 #include <set>
+#include <vector>
 #include "lite_str.h"
 
 using namespace std;
@@ -69,10 +70,25 @@ void test4() {
   EQ(s, "abcdefabcdefabcdefab");
 }
 
+void test5() {
+  test_str s = "pikpak";
+  s += "aaa";
+  {
+    vector<test_str> v;
+    for (int i = 0; i < 10000; ++i)
+      v.push_back(s + "ooo");
+    for (int i = 5000; i < 10000; ++i)
+      v[i] += "pokpok";
+  }
+  EQ(s, "pikpakaaa");
+  print(s);
+}
+
 int main() {
   test1();
   test2();
   test3();
   test4();
+  test5();
   my_str_allocator::check();
 }
