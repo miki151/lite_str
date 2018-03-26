@@ -1,5 +1,5 @@
 # lite_str
-Simple ref-counted, immutable c++ string class.
+Simple reference counted, immutable c++ string class.
 
 Features:
 * small, cheap to copy
