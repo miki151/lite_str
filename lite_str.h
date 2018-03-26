@@ -1,95 +1,102 @@
 #include <cstring>
 #include <utility>
+#include <cstdint>
 
 namespace detail {
-struct lite_str_allocator {
-  static char* allocate(size_t size) {
-    return new char[size];
-  }
-  static void deallocate(char* ptr) {
-    delete [] ptr;
-  }
-};
+  template<typename char_type>
+  struct lite_str_allocator {
+    static char_type* allocate(size_t size) {
+      return new char_type[size];
+    }
+    static void deallocate(const char_type* ptr) {
+      delete [] ptr;
+    }
+  };
+
+  struct char_char_traits {
+    static size_t get_length(const char* s) {
+      return strlen(s);
+    }
+  };
 }
 
-template <typename char_type, typename allocator_t = detail::lite_str_allocator>
+template <typename char_type, typename char_traits, typename allocator_t = detail::lite_str_allocator<char_type>>
 class basic_lite_str {
-  char *ptr;
-  typedef int length_t;
+  const char_type *ptr;
+  typedef uint32_t length_t;
   length_t length;
   enum Type {
     ALLOCATED,
     LITERAL
   } type;
-  typedef int alloc_info;
+
+  // TODO: figure out if using an atomic counter is enough to support copying strings between threads.
+  typedef uint32_t ref_counter_t;
+
+  ref_counter_t& get_ref_counter() const {
+    // the reference counter is at the end of the buffer, after the '\0'.
+    return *((ref_counter_t*)(ptr + length + 1));
+  }
 
   public:
-  alloc_info& get_alloc_info() const {
-    return *((alloc_info*)(ptr + (length + 1) * sizeof(char_type)));
-  }
 
-  basic_lite_str() {
+  basic_lite_str(const char_type* s = "") {
     type = LITERAL;
-    length = 0;
-    ptr = (char*)&length;
+    ptr = s;
+    length = char_traits::get_length(s);
   }
 
-  basic_lite_str(const char_type* s) {
-    type = LITERAL;
-    ptr = (char_type*)s;
-    length = strlen(s);
+  basic_lite_str(const basic_lite_str& other) {
+    copy_from(other);
   }
 
-  basic_lite_str(const basic_lite_str& o) {
-    copy_from(o);
+  basic_lite_str(basic_lite_str&& other) {
+    move_from(std::move(other));
   }
 
-  basic_lite_str(basic_lite_str&& o) {
-    move_from(std::move(o));
-  }
-
-  basic_lite_str& operator = (const basic_lite_str& o) {
+  basic_lite_str& operator = (const basic_lite_str& other) {
     destruct();
-    copy_from(o);
+    copy_from(other);
     return *this;
   }
 
-  basic_lite_str& operator = (basic_lite_str&& o) {
+  basic_lite_str& operator = (basic_lite_str&& other) {
     destruct();
-    move_from(std::move(o));
+    move_from(std::move(other));
     return *this;
   }
 
-  void move_from(basic_lite_str&& o) {
-    //std::cout << "Moving from\n";
-    ptr = o.ptr;
-    type = o.type;
-    length = o.length;
-    o.type = LITERAL;
+  void move_from(basic_lite_str&& other) {
+    ptr = other.ptr;
+    type = other.type;
+    length = other.length;
+    // This stops o from decreasing the ref counter if there is one
+    other.type = LITERAL;
   }
 
-  void copy_from(const basic_lite_str& o) {
-    ptr = o.ptr;
-    type = o.type;
-    length = o.length;
-    switch (type) {
-      case ALLOCATED:
-        ++get_alloc_info();
-        break;
-      case LITERAL:
-        break;
-    }
+  void copy_from(const basic_lite_str& other) {
+    ptr = other.ptr;
+    type = other.type;
+    length = other.length;
+    if (type == ALLOCATED)
+      ++get_ref_counter();
   }
 
-  void allocate(length_t l) {
+  // creates a new allocated string and returns the non-const buffer so the user can fill it in.
+  char_type* create_buffer(length_t l) {
+    destruct();
     length = l;
-    ptr = allocator_t::allocate((length + 1) * sizeof(char_type) + sizeof(alloc_info));
-    get_alloc_info() = 1;
+    auto alloc_info_size = (sizeof(ref_counter_t) - 1) / sizeof(char_type) + 1;
+    // Allocate enough for the string, the '\0' and the ref count at the end.
+    auto buf = allocator_t::allocate(length + 1 + alloc_info_size);
+    ptr = buf;
+    get_ref_counter() = 1;
     type = ALLOCATED;
+    return buf;
   }
 
   void destruct() {
-    if (type == ALLOCATED && --get_alloc_info() == 0) {
+    if (type == ALLOCATED && --get_ref_counter() == 0) {
       allocator_t::deallocate(ptr);
     }
   }
@@ -109,86 +116,82 @@ class basic_lite_str {
   const char_type* data() const {
     return ptr;
   }
-
-  char_type* writable_data() {
-    return ptr;
-  }
 };
 
-using lite_str = basic_lite_str<char>;
+template <typename allocator = detail::lite_str_allocator<char>>
+using lite_str = basic_lite_str<char, detail::char_char_traits, allocator>;
 
-
-template <typename stream, typename alloc>
-stream& operator << (stream& os, const basic_lite_str<char, alloc>& s) {
+template <typename stream, typename char_type, typename char_traits, typename alloc>
+stream& operator << (stream& os, const basic_lite_str<char_type, char_traits, alloc>& s) {
   os << s.data();
   return os;
 }
 
-template <typename char_type, typename alloc>
-basic_lite_str<char_type, alloc> concatenate (const char_type* s1, const char_type* s2) {
-  int l1 = strlen(s1);
-  int l2 = strlen(s2);
-  basic_lite_str<char_type, alloc> ret;
-  ret.allocate(l1 + l2);
-  strncpy(ret.writable_data(), s1, l1 * sizeof(char_type));
-  strncpy(ret.writable_data() + l1 * sizeof(char_type), s2, (l2 + 1) * sizeof(char_type));
+template <typename char_type, typename char_traits, typename alloc>
+static basic_lite_str<char_type, char_traits, alloc> concatenate(const char_type* s1, const char_type* s2) {
+  int l1 = char_traits::get_length(s1);
+  int l2 = char_traits::get_length(s2);
+  basic_lite_str<char_type, char_traits, alloc> ret;
+  auto buf = ret.create_buffer(l1 + l2);
+  memcpy(buf, s1, l1 * sizeof(char_type));
+  memcpy(buf + l1 * sizeof(char_type), s2, (l2 + 1) * sizeof(char_type));
   return ret;
 }
 
-template <typename char_type, typename alloc>
-basic_lite_str<char_type, alloc> operator + (const basic_lite_str<char_type, alloc>& s1, const basic_lite_str<char_type, alloc>& s2) {
-  return concatenate<char_type, alloc>(s1.data(), s2.data());
+template <typename char_type, typename char_traits, typename alloc>
+basic_lite_str<char_type, char_traits, alloc> operator + (const basic_lite_str<char_type, char_traits, alloc>& s1, const basic_lite_str<char_type, char_traits, alloc>& s2) {
+  return concatenate<char_type, char_traits, alloc>(s1.data(), s2.data());
 }
 
-template <typename char_type, typename alloc>
-basic_lite_str<char_type, alloc> operator + (const basic_lite_str<char_type, alloc>& s1, const char* s2) {
-  return concatenate<char_type, alloc>(s1.data(), s2);
+template <typename char_type, typename char_traits, typename alloc>
+basic_lite_str<char_type, char_traits, alloc> operator + (const basic_lite_str<char_type, char_traits, alloc>& s1, const char_type* s2) {
+  return concatenate<char_type, char_traits, alloc>(s1.data(), s2);
 }
 
-template <typename char_type, typename alloc>
-basic_lite_str<char_type, alloc> operator + (const char* s1, const basic_lite_str<char_type, alloc>& s2) {
-  return concatenate<char_type, alloc>(s1, s2.data());
+template <typename char_type, typename char_traits, typename alloc>
+basic_lite_str<char_type, char_traits, alloc> operator + (const char_type* s1, const basic_lite_str<char_type, char_traits, alloc>& s2) {
+  return concatenate<char_type, char_traits, alloc>(s1, s2.data());
 }
 
-template <typename char_type, typename alloc>
-basic_lite_str<char_type, alloc>& operator += (basic_lite_str<char_type, alloc>& s1, const char* s2) {
-  s1 = concatenate<char_type, alloc>(s1.data(), s2);
+template <typename char_type, typename char_traits, typename alloc>
+basic_lite_str<char_type, char_traits, alloc>& operator += (basic_lite_str<char_type, char_traits, alloc>& s1, const char_type* s2) {
+  s1 = concatenate<char_type, char_traits, alloc>(s1.data(), s2);
   return s1;
 }
 
-template <typename char_type, typename alloc>
-basic_lite_str<char_type, alloc>& operator += (basic_lite_str<char_type, alloc>& s1, const basic_lite_str<char_type, alloc>& s2) {
-  s1 = concatenate<char_type, alloc>(s1.data(), s2.data());
+template <typename char_type, typename char_traits, typename alloc>
+basic_lite_str<char_type, char_traits, alloc>& operator += (basic_lite_str<char_type, char_traits, alloc>& s1, const basic_lite_str<char_type, char_traits, alloc>& s2) {
+  s1 = concatenate<char_type, char_traits, alloc>(s1.data(), s2.data());
   return s1;
 }
 
-template <typename char_type, typename alloc>
-bool operator == (const basic_lite_str<char_type, alloc>& s1, const basic_lite_str<char_type, alloc>& s2) {
+template <typename char_type, typename char_traits, typename alloc>
+bool operator == (const basic_lite_str<char_type, char_traits, alloc>& s1, const basic_lite_str<char_type, char_traits, alloc>& s2) {
   return s1.data() == s2.data() || (s1.size() == s2.size() && memcmp(s1.data(), s2.data(), s1.size()) == 0);
 }
 
-template <typename char_type, typename alloc>
-bool operator == (const basic_lite_str<char_type, alloc>& s1, const char* s2) {
-  return s1.data() == s2 || (s1.size() == strlen(s2) && memcmp(s1.data(), s2, s1.size()) == 0);
+template <typename char_type, typename char_traits, typename alloc>
+bool operator == (const basic_lite_str<char_type, char_traits, alloc>& s1, const char_type* s2) {
+  return s1.data() == s2 || (s1.size() == char_traits::get_length(s2) && memcmp(s1.data(), s2, s1.size()) == 0);
 }
 
-template <typename char_type, typename alloc>
-bool operator == (const char* s1, const basic_lite_str<char_type, alloc>& s2) {
-  return s1 == s2.data() || (s2.size() == strlen(s1) && memcmp(s2.data(), s1, s2.size()) == 0);
+template <typename char_type, typename char_traits, typename alloc>
+bool operator == (const char_type* s1, const basic_lite_str<char_type, char_traits, alloc>& s2) {
+  return s1 == s2.data() || (s2.size() == char_traits::get_length(s1) && memcmp(s2.data(), s1, s2.size()) == 0);
 }
 
-template <typename char_type, typename alloc>
-bool operator != (const basic_lite_str<char_type, alloc>& s1, const basic_lite_str<char_type, alloc>& s2) {
+template <typename char_type, typename char_traits, typename alloc>
+bool operator != (const basic_lite_str<char_type, char_traits, alloc>& s1, const basic_lite_str<char_type, char_traits, alloc>& s2) {
   return !(s1 == s2);
 }
 
-template <typename char_type, typename alloc>
-bool operator != (const basic_lite_str<char_type, alloc>& s1, const char* s2) {
+template <typename char_type, typename char_traits, typename alloc>
+bool operator != (const basic_lite_str<char_type, char_traits, alloc>& s1, const char_type* s2) {
   return !(s1 == s2);
 }
 
-template <typename char_type, typename alloc>
-bool operator != (const char* s1, const basic_lite_str<char_type, alloc>& s2) {
+template <typename char_type, typename char_traits, typename alloc>
+bool operator != (const char_type* s1, const basic_lite_str<char_type, char_traits, alloc>& s2) {
   return !(s1 == s2);
 }
 

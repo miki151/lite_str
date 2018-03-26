@@ -8,14 +8,14 @@
 using namespace std;
 
 struct my_str_allocator {
-  static set<char*> allocated;
+  static set<const char*> allocated;
   static char* allocate(size_t size) {
     auto ret = new char[size];
     allocated.insert(ret);
     return ret;
   }
 
-  static void deallocate(char* ptr) {
+  static void deallocate(const char* ptr) {
     allocated.erase(ptr);
     delete [] ptr;
   }
@@ -25,9 +25,9 @@ struct my_str_allocator {
   }
 };
 
-set<char*> my_str_allocator::allocated;
+set<const char*> my_str_allocator::allocated;
 
-using test_str = basic_lite_str<char, my_str_allocator>;
+using test_str = lite_str<my_str_allocator>;
 
 void print(test_str s) {
   cout << s << endl;
