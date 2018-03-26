@@ -1,4 +1,5 @@
 #include <cstring>
+#include <utility>
 
 namespace detail {
 struct lite_str_allocator {

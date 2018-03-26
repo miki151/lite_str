@@ -36,29 +36,29 @@ void print(test_str s) {
 #define EQ(a, b) do { if (!(a == b) || a != b) { std::cerr << a << "!=" << b << std::endl; abort(); }} while (0);
 
 void test1() {
-  test_str s1 = "dupa";
-  test_str s2 = "kupa";
-  s1 = s2 + " i sraka";
-  s1 = s1 + " i ptaka";
-  EQ(s1, "kupa i sraka i ptaka");
-  EQ("kupa i sraka i ptaka", s1);
+  test_str s1 = "foo";
+  test_str s2 = "bar";
+  s1 = s2 + " i baz";
+  s1 = s1 + " i qux";
+  EQ(s1, "bar i baz i qux");
+  EQ("bar i baz i qux", s1);
   print(s1);
   print(s2);
 }
 
 void test2() {
   test_str s;
-  EQ(s + "dupa", "dupa");
+  EQ(s + "foo", "foo");
 }
 
 void test3() {
   test_str s;
   {
-    test_str s2 = "dupa";
+    test_str s2 = "foo";
     s = s2;
     EQ(s, s2);
   }
-  EQ(s + "dupa", "dupadupa");
+  EQ(s + "foo", "foofoo");
 }
 
 void test4() {
